@@ -8,6 +8,7 @@ unsupported).
 import logging
 import html
 import re
+from time import time as get_timestamp_second
 
 from requests.exceptions import HTTPError
 from streamlink.buffers import RingBuffer
@@ -18,6 +19,8 @@ from streamlink.stream.hls import HLSStream, HLSStreamReader, HLSStreamWorker
 
 log = logging.getLogger(__name__)
 
+# If the playlist keeps unchange for PLAYLIST_UNCHANGE_THRESHOLD_SEC, we consider the stream is ended.
+PLAYLIST_UNCHANGE_THRESHOLD_SEC = 15
 
 def _get_eplus_data(session, eplus_url):
     """Return video data for an eplus event/video page.
@@ -41,8 +44,9 @@ class EplusHLSStreamWorker(HLSStreamWorker):
     def __init__(self, *args, eplus_url=None, **kwargs):
         super().__init__(*args, **kwargs)
         self._eplus_url = eplus_url
+        self._first_playlist_unchanged = None
 
-    def reload_playlist(self):
+    def _reload_playlist_helper(self):
         try:
             return super().reload_playlist()
         except StreamError as err:
@@ -62,6 +66,31 @@ class EplusHLSStreamWorker(HLSStreamWorker):
             else:
                 raise
         return super().reload_playlist()
+
+    def reload_playlist(self):
+        reload_result = self._reload_playlist_helper()
+        log.debug(f'[EplusHLSStreamWorker] Playlist reloaded. self.playlist_changed = {self.playlist_changed}, _first_playlist_unchanged = {self._first_playlist_unchanged}')
+
+        if not self.playlist_changed:
+            # If playlist unchanged, check if the stream is actually ended.
+            current_time = get_timestamp_second()
+            if self._first_playlist_unchanged is None:
+                self._first_playlist_unchanged = current_time
+
+            if current_time - self._first_playlist_unchanged > PLAYLIST_UNCHANGE_THRESHOLD_SEC:
+                log.debug(f'[EplusHLSStreamWorker] Unchage threshold exceed. current_time = {current_time}, self._first_playlist_unchanged = {self._first_playlist_unchanged}')
+
+                # The playlist won't change. Close the stream.
+                self.close()
+            else:
+                log.debug(f'[EplusHLSStreamWorker] Playlist unchanged but threshold does not exceed. current_time = {current_time}, self._first_playlist_unchanged = {self._first_playlist_unchanged}')
+        else:
+            # If playlist changed, reset first_playlist_unchanged.
+            if self._first_playlist_unchanged is not None:
+                log.debug(f'[EplusHLSStreamWorker] Playlist changed. Reset _first_playlist_unchanged to None.')
+            self._first_playlist_unchanged = None
+
+        return reload_result
 
 
 class EplusHLSStreamReader(HLSStreamReader):
