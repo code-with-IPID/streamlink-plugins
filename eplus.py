@@ -53,6 +53,9 @@ class EplusSessionUpdater(Thread):
         super().__init__(name='EplusSessionUpdater', daemon=True)
 
     def close(self):
+        if self._closed.is_set():
+            print("EplusSessionUpdater was closed")
+            return
         log.debug('[EplusSessionUpdater] Closing...')
         self._closed.set()
 
