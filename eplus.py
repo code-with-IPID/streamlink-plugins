@@ -8,7 +8,7 @@ unsupported).
 import logging
 import html
 import re
-from time import time as get_timestamp_second
+import time
 from threading import Thread, Event
 
 from requests.exceptions import HTTPError
@@ -54,7 +54,6 @@ class EplusSessionUpdater(Thread):
 
     def close(self):
         if self._closed.is_set():
-            print("EplusSessionUpdater was closed")
             return
         log.debug('[EplusSessionUpdater] Closing...')
         self._closed.set()
@@ -64,37 +63,52 @@ class EplusSessionUpdater(Thread):
             if self._closed.is_set():
                 return
 
-            cookies_updater_session = HTTPSession()
-            cookies_updater_session.proxies = self._session.http.proxies
-            cookies_updater_session.headers = self._session.http.headers
-            cookies_updater_session.trust_env = self._session.http.trust_env
-            cookies_updater_session.verify = self._session.http.verify
-            cookies_updater_session.cert = self._session.http.cert
-            cookies_updater_session.timeout = self._session.http.timeout
-
-            # Create a new session, and send a request to Eplus url to obtain the cookies
+            # Create a new session without cookies and send a request to Eplus url to obtain new cookies.
             log.debug('[EplusSessionUpdater] Refreshing cookies...')
             try:
-                fresh_response = cookies_updater_session.get(self._eplus_url, headers={
-                    'Cookie': ''
-                })
+                fresh_response = self._session_duplicator().get(self._eplus_url)
+                log.debug(f'[EplusSessionUpdater] Got new cookies: {repr(fresh_response.cookies)}')
 
-                # Update the session with the new cookies
+                # Filter cookies.
+                # For now, only the "ci_session" cookie is what we don't need, so ignore it.
+                cookie = next(
+                    cookie for cookie in fresh_response.cookies
+                        if cookie.name != 'ci_session'
+                        and cookie.expires > time.time()
+                )
+                log.debug(f'[EplusSessionUpdater] Found a valid cookie: {repr(cookie)}')
+
+                # Refresh the cookies at most 5 minutes before expiration.
+                diff_sec = cookie.expires - time.time()
+                advance_sec = min(diff_sec, 5 * 60)
+                next_timestamp = cookie.expires - advance_sec
+                wait_sec = next_timestamp - time.time()
+
+                # Update the global session with the new cookies.
                 self._session.http.cookies.clear()
                 self._session.http.cookies.update(fresh_response.cookies)
-                log.debug(f'[EplusSessionUpdater] Successfully updated cookies: {repr(fresh_response.cookies)}')
-
-                # For now, only the "ci_session" cookie is not what we need, so just ignore it.
-                expires = next(cookie for cookie in fresh_response.cookies if cookie.name != 'ci_session').expires
-
-                # Refresh the cookies 5 minutes before expiration.
-                wait_sec = expires - get_timestamp_second() - 5 * 60
-                log.debug(f'[EplusSessionUpdater] Will update again after {int(wait_sec // 60)}m {int(wait_sec % 60)}s')
+                log.debug(f'[EplusSessionUpdater] Refreshed cookies. Next attempt will be at about {time.strftime("%Y%m%d-%H%M%S%z", time.localtime(next_timestamp))}.')
                 self._closed.wait(wait_sec)
 
             except Exception as e:
                 # TODO: Retry refresh cookies
                 log.error(f'[EplusSessionUpdater] Failed to refresh cookies: \n{e}')
+
+    def _session_duplicator(self):
+        """
+        Make a duplicate of the member "_session" except for cookies.
+        """
+
+        new_session = HTTPSession()
+
+        new_session.proxies = self._session.http.proxies
+        new_session.headers = self._session.http.headers
+        new_session.trust_env = self._session.http.trust_env
+        new_session.verify = self._session.http.verify
+        new_session.cert = self._session.http.cert
+        new_session.timeout = self._session.http.timeout
+
+        return new_session
 
 
 class EplusHLSStreamWorker(HLSStreamWorker):
