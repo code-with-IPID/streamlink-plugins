@@ -49,6 +49,8 @@ class EplusSessionUpdater(Thread):
         self._eplus_url = eplus_url
         self._session = session
         self._closed = Event()
+        self._retries = 0
+        self._last_expire_timestamp = time.time()
 
         super().__init__(name='EplusSessionUpdater', daemon=True)
 
@@ -92,16 +94,37 @@ class EplusSessionUpdater(Thread):
                 self._session.http.cookies.clear()
                 self._session.http.cookies.update(fresh_response.cookies)
 
+                self._retries = 0
+                self._last_expire_timestamp = cookie.expires
+
                 log.debug(
                     '[EplusSessionUpdater] Refreshed cookies. Next attempt will be at about '
                     f'{time.strftime(r"%Y%m%d-%H%M%S%z", time.localtime(next_timestamp))}. '
                 )
 
                 self._closed.wait(wait_sec)
+                continue
+
+            except StopIteration as e:
+                # next() exhausted all cookies.
+                log.error('[EplusSessionUpdater] No valid cookies found.')
 
             except Exception as e:
-                # TODO: Retry refresh cookies
                 log.error(f'[EplusSessionUpdater] Failed to refresh cookies: {e}')
+
+            self._retries += 1
+            retry_delay_sec = 2 ** (self._retries - 1)
+
+            if time.time() + retry_delay_sec > self._last_expire_timestamp + 1 * 60 * 60:
+                log.error('[EplusSessionUpdater] We have not refreshed cookies in the past hour and will not try again.')
+
+                self.close()
+                return
+
+            log.error(f'[EplusSessionUpdater] We will retry in {retry_delay_sec}s.')
+
+            self._closed.wait(retry_delay_sec)
+            continue
 
     def _session_duplicator(self):
         """
