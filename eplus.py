@@ -104,7 +104,6 @@ class EplusHLSStreamWorker(HLSStreamWorker):
 
     def _reload_playlist_helper(self):
         try:
-            log.debug('[EplusHLSStreamWorker] Reloading playlist...')
             return super().reload_playlist()
         except StreamError as err:
             rerr = getattr(err, "err", None)
