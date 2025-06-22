@@ -116,6 +116,9 @@ def _get_eplus_data(session: HTTPSession, eplus_url: str):
 def _try_login(session: HTTPSession, eplus_url: str, login_id: str, password: str):
     log.info("Getting auth status")
 
+    # prevent new auth attempts from being affected by existing cookies.
+    session.cookies.clear()
+
     res = session.get(eplus_url)
     if res.url.startswith(eplus_url):
         # already logged in or no login required
