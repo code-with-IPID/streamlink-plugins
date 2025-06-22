@@ -220,6 +220,9 @@ class EplusSessionUpdater(Thread):
     otherwise we may got HTTP 403 and no new stream could be downloaded.
     """
 
+    # Eplus refreshes cookies every 15 minutes (900 seconds).
+    OFFICIAL_REFRESH_INTERVAL_SECS = 15 * 60
+
     _eplus_ctx: ClassVar[EplusCtx]
 
     def __init__(self):
@@ -279,8 +282,8 @@ class EplusSessionUpdater(Thread):
                 wait_sec = (cookie.expires - 5 * 60) - time.time()
                 # Don't be too close! Retry it right away.
                 wait_sec = max(wait_sec, 0)
-                # Eplus refreshes cookies every 15 minutes.
-                wait_sec = min(15 * 60, wait_sec)
+                # Do like what they do.
+                wait_sec = min(wait_sec, self.OFFICIAL_REFRESH_INTERVAL_SECS)
 
                 self._log.debug(
                     "Refreshed cookies. Next attempt will be at about "
@@ -308,7 +311,8 @@ class EplusSessionUpdater(Thread):
                 self._log.error(f"Failed to refresh cookies: {e!r}")
 
             self._retries += 1
-            retry_delay_sec = 2 ** (self._retries - 1)
+            # Don't be "lazy".
+            retry_delay_sec = min(2 ** (self._retries - 1), self.OFFICIAL_REFRESH_INTERVAL_SECS)
 
             if time.time() + retry_delay_sec > self._last_expire_timestamp + 1 * 60 * 60:
                 self._log.error("We have not refreshed cookies in the past hour and will not try again.")
